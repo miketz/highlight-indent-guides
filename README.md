@@ -1,4 +1,4 @@
-[![MELPA](https://melpa.org/packages/highlight-indent-guides-badge.svg)](https://melpa.org/#/highlight-indent-guides)
+[![MELPA](https://melpa.org/packages/highlight-indent-guides-badge.svg)](https://melpa.org/#/highlight-indent-guides) [![travis](https://travis-ci.org/DarthFennec/highlight-indent-guides.svg?branch=master)](https://travis-ci.org/DarthFennec/highlight-indent-guides)
 
 highlight-indent-guides.el
 ==========================
@@ -16,9 +16,7 @@ Screenshots
 
 ![responsive gif](https://i.imgur.com/hIUIKgs.gif)
 
-``` emacs-lisp
-(setq highlight-indent-guides-method ...)
-```
+<kbd>M-x customize-variable RET highlight-indent-guides-method RET ...</kbd>
 
 `'fill` | `'column`
 --------|----------
@@ -77,18 +75,14 @@ This mode supports four display methods. To change the display method, customize
 
 For example:
 
-``` emacs-lisp
-(setq highlight-indent-guides-method 'character)
-```
+<kbd>M-x customize-variable RET highlight-indent-guides-method RET 'character</kbd>
 
 To change the character used for drawing guide lines with the `character`
 display method, customize `highlight-indent-guides-character`.
 
 For example:
 
-``` emacs-lisp
-(setq highlight-indent-guides-character ?\|)
-```
+<kbd>M-x customize-variable RET highlight-indent-guides-character RET ?\|</kbd>
 
 Highlight Colors
 ----------------
@@ -100,24 +94,35 @@ colors more intense or subtle.
 
 For example:
 
-``` emacs-lisp
-(setq highlight-indent-guides-auto-odd-face-perc 15)
-(setq highlight-indent-guides-auto-even-face-perc 15)
-(setq highlight-indent-guides-auto-character-face-perc 20)
-```
+<kbd>M-x customize-variable RET highlight-indent-guides-auto-odd-face-perc RET 15</kbd>
+<kbd>M-x customize-variable RET highlight-indent-guides-auto-even-face-perc RET 15</kbd>
+<kbd>M-x customize-variable RET highlight-indent-guides-auto-character-face-perc RET 20</kbd>
 
 To set the colors manually, disable this feature and customize the faces
 directly.
 
 For example:
 
-``` emacs-lisp
-(setq highlight-indent-guides-auto-enabled nil)
+<kbd>M-x customize-variable RET highlight-indent-guides-auto-enabled RET nil</kbd>
 
+``` emacs-lisp
 (set-face-background 'highlight-indent-guides-odd-face "darkgray")
 (set-face-background 'highlight-indent-guides-even-face "dimgray")
 (set-face-foreground 'highlight-indent-guides-character-face "dimgray")
 ```
+
+In some configurations, the following error might show up when emacs starts:
+
+```
+Error: highlight-indent-guides cannot auto set faces: `default' face is not set properly
+```
+
+This is meant as a warning for when the faces can't be set, but in some
+situations the error might show up even when the faces are set properly. If this
+happens regularly, the error can be suppressed by customizing
+`highlight-indent-guides-suppress-auto-error`:
+
+<kbd>M-x customize-variable RET highlight-indent-guides-suppress-auto-error RET t</kbd>
 
 Responsive Guides
 -----------------
@@ -137,9 +142,7 @@ period of time (one tenth of a second, by default). If you would like to change
 this behavior, customize `highlight-indent-guides-delay`, and set it to the
 number of seconds to wait. For example, to disable the delay entirely:
 
-``` emacs-lisp
-(setq highlight-indent-guides-delay 0)
-```
+<kbd>M-x customize-variable RET highlight-indent-guides-delay RET 0</kbd>
 
 Enabling this feature provides more highlight faces, as well as more color
 modifiers for the dynamic colors feature. These are specified in the following
@@ -218,17 +221,18 @@ function, which determines what your guides will look like. Customize
 - `highlight-indent-guides--bitmap-line`: A guide is a solid vertical line.
 - Or, write your own.
 
-A custom bitmap function takes three parameters:
+A custom bitmap function takes four parameters:
 
 - `width`: The width in pixels of the bitmap.
 - `height`: The height in pixels of the bitmap.
 - `crep`: A character that represents a "filled" or "colored" pixel. This is as
   opposed to an "empty" pixel, which the background color will show through.
+- `zrep`: A character that represents an "empty" pixel.
 
-The function should return a list of strings, representing the pixels
-themselves. The list must contain `height` strings, and each string must contain
-`width` characters, all of which are either `crep` for a colored pixel or `?0`
-for an empty pixel.
+The function should return a list of string lists, representing the pixels
+themselves. The list must contain `height` sublists, and each sublist must
+contain `width` strings, all of which are either `crep` for a colored pixel or
+`zrep` for an empty pixel.
 
 Limitations
 -----------

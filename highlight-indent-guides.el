@@ -21,8 +21,8 @@
 ;; SOFTWARE.
 ;;
 ;; Author: DarthFennec <darthfennec@derpymail.org>
-;; Version: 0.9.0
-;; Package-Requires: ((emacs "24"))
+;; Version: 0.9.2
+;; Package-Requires: ((emacs "24.1"))
 ;; URL: https://github.com/DarthFennec/highlight-indent-guides
 
 ;;; Commentary:
@@ -138,6 +138,16 @@ background color to automatically calculate reasonable indent guide colors."
   :type 'boolean
   :group 'highlight-indent-guides)
 
+(defcustom highlight-indent-guides-suppress-auto-error nil
+  "Whether to suppress the error that sometimes prints when calculating faces.
+When automatically calculating faces, sometimes there will be an error that
+\"`default' face is not set properly\".  If this flag is enabled,
+highlight-indent-guides will not print this error.  This can be helpful in
+situations where faces are calculated correctly, but the error is printed
+anyway, which can be annoying."
+  :type 'boolean
+  :group 'highlight-indent-guides)
+
 (defcustom highlight-indent-guides-highlighter-function
   'highlight-indent-guides--highlighter-default
   "Determine the correct face to use for a given indentation level.
@@ -163,7 +173,7 @@ character that should be used to represent a colored pixel.  The return value is
 a list of strings, with each string representing a row of pixels.  The list
 should be HEIGHT in size, and each string in the list should be WIDTH in size.
 Each character represents a pixel, and should be CREP if the pixel is colored,
-and ?0 if it isn't colored."
+and ZREP if it isn't colored."
   :type 'function
   :group 'highlight-indent-guides)
 
@@ -242,6 +252,9 @@ This is only useful if `highlight-indent-guides-responsive' is not nil."
 (defvar highlight-indent-guides--line-cache '(nil nil nil)
   "The line cache for responsive mode.")
 (make-variable-buffer-local 'highlight-indent-guides--line-cache)
+
+(defvar highlight-indent-guides--bitmap-memo (make-hash-table :test 'equal)
+  "The memoization cache for bitmap guide data.")
 
 (defun highlight-indent-guides--try-merge-ranges (&rest args)
   "Given multiple character position ranges (ARGS), merge where possible.
@@ -722,6 +735,17 @@ used as a `font-lock-keywords' face definition."
            (setq facep (1+ facep)))
          `(face nil display ,showstr))))))
 
+(defmacro highlight-indent-guides--memoize-bitmap (idx &rest body)
+  "Memoize data for the bitmap highlighter.
+Run and return BODY.  Memoize the result using the key IDX.  If the macro is
+called again with the same IDX, return the memoized data instead of running BODY
+again."
+  `(let ((val (gethash ,idx highlight-indent-guides--bitmap-memo)))
+     (if val val
+       (setq val (progn ,@body))
+       (puthash ,idx val highlight-indent-guides--bitmap-memo)
+       val)))
+
 (defun highlight-indent-guides--bitmap-highlighter ()
   "Apply highlighting to the indentation.
 Return highlighting information for the matched character.  Displays a bitmap in
@@ -734,17 +758,21 @@ as a `font-lock-keywords' face definition."
      (let ((highlighter highlight-indent-guides-highlighter-function)
            (facep (car prop)) (segs (nth 1 prop))
            (starter (nth 2 prop)) (cwidth (nth 3 prop))
+           (width (frame-char-width)) (height (frame-char-height))
            face facelist showbmp)
        (if (and (null segs) (eq cwidth 1))
            (progn
              (setq face (funcall highlighter facep (car shouldhl) 'bitmap))
              (when face
-               (setq showbmp (highlight-indent-guides--draw-bitmap
-                              (funcall
-                               highlight-indent-guides-bitmap-function
-                               (default-font-width) (default-font-height) ?1)
-                              (list (cons "1" (face-foreground face))))))
-             `(face nil display ,showbmp))
+               (setq showbmp
+                     (highlight-indent-guides--memoize-bitmap
+                      (concat ";" (number-to-string width)
+                              ":" (number-to-string height)
+                              ":" (face-foreground face))
+                      (highlight-indent-guides--draw-bitmap
+                       (highlight-indent-guides--build-bitmap
+                        width height (face-foreground face))))))
+             `(face nil display ,(copy-sequence showbmp)))
          (setq facelist (make-list cwidth nil))
          (when starter
            (setq face (funcall highlighter facep (pop shouldhl) 'bitmap))
@@ -753,73 +781,90 @@ as a `font-lock-keywords' face definition."
            (setq face (funcall highlighter facep (pop shouldhl) 'bitmap))
            (when face (setcar (nthcdr seg facelist) (face-foreground face)))
            (setq facep (1+ facep)))
-         (setq showbmp (highlight-indent-guides--concat-bitmap
-                        (default-font-width) (default-font-height) facelist))
-         `(face nil display ,showbmp))))))
+         (setq showbmp
+               (highlight-indent-guides--memoize-bitmap
+                (concat ";" (number-to-string width)
+                        ":" (number-to-string height)
+                        ":" (mapconcat 'identity facelist ":"))
+                (highlight-indent-guides--concat-bitmap width height facelist)))
+         `(face nil display ,(copy-sequence showbmp)))))))
 
 (defun highlight-indent-guides--concat-bitmap (width height facelist)
-  "Build a concatenated XPM image based on FACELIST.
+  "Build a concatenated PBM image based on FACELIST.
 FACELIST represents characters in the guide block (nil for no guide, and a color
 string for a guide with that color).  WIDTH and HEIGHT are the width and height
 of each character in the block."
-  (let ((res (make-list height ""))
-        (crep 0)
-        colors nextbmp)
-    (while (not (null facelist))
+  (let ((res (make-list height nil))
+        nextbmp)
+    (while facelist
       (if (null (car facelist))
           (let ((zlen 0))
-            (while (and (not (null facelist)) (null (car facelist)))
+            (while (and facelist (null (car facelist)))
               (setq zlen (+ zlen width))
               (setq facelist (cdr facelist)))
             (dotimes (i height)
-              (setcar (nthcdr i res) (concat (nth i res) (make-string zlen ?0)))))
-        (setq crep (1+ crep))
-        (setq nextbmp (funcall
-                       highlight-indent-guides-bitmap-function
-                       width height (string-to-char (number-to-string crep))))
-        (setq colors (cons (cons (number-to-string crep) (car facelist)) colors))
+              (setcar (nthcdr i res) (append (nth i res) (make-list zlen " 65535 0 65535")))))
+        (setq nextbmp (highlight-indent-guides--build-bitmap width height (car facelist)))
         (setq facelist (cdr facelist))
         (dotimes (i height)
-          (setcar (nthcdr i res) (concat (nth i res) (nth i nextbmp))))))
-    (highlight-indent-guides--draw-bitmap res colors)))
+          (setcar (nthcdr i res) (append (nth i res) (nth i nextbmp))))))
+    (highlight-indent-guides--draw-bitmap res)))
 
-(defun highlight-indent-guides--draw-bitmap (lines colorset)
-  "Using pixel data LINES and color data COLORSET, build an XPM image."
+(defun highlight-indent-guides--draw-bitmap (lines)
+  "Using pixel data LINES, build a PBM image."
   (let* ((width (length (car lines)))
          (height (length lines))
-         (start "/* XPM */\nstatic char *guide[] = {")
-         (size (concat "\"" (number-to-string width) " "
-                       (number-to-string height) " "
-                       (number-to-string (1+ (length colorset))) " 1\","))
-         (colors "\"0 c None\",")
-         (pixels (concat "\"" (mapconcat 'identity lines "\",\"") "\""))
-         (end "};")
-         data csym)
-    (dolist (color colorset)
-      (setq colors (concat colors "\"" (car color) " c color" (car color) "\","))
-      (setq csym (cons (cons (concat "color" (car color)) (cdr color)) csym)))
-    (setq data (concat start size colors pixels end))
-    `(image :type xpm :data ,data :mask heuristic :ascent center
-            :color-symbols ,csym)))
+         (data (concat "P3 " (number-to-string width) " " (number-to-string height) " 65535")))
+    (dolist (line lines) (setq data (concat data (apply 'concat line))))
+    `(image :type pbm :data ,data :mask heuristic :ascent center)))
 
-(defun highlight-indent-guides--bitmap-line (width height crep)
-  "Defines a solid guide line, two pixels wide."
+(defun highlight-indent-guides--build-bitmap (width height face)
+  "Build a PBM image string.
+The image is of dimensions WIDTH and HEIGHT, and color FACE, and generated by
+`highlight-indent-guides-bitmap-function'."
+  (highlight-indent-guides--memoize-bitmap
+   (concat (number-to-string width) ":" (number-to-string height) ":" face)
+   (funcall highlight-indent-guides-bitmap-function
+            width height
+            (highlight-indent-guides--pbm-color face) " 65535 0 65535")))
+
+(defun highlight-indent-guides--pbm-color (color)
+  "Create a PBM color string from the Emacs color string COLOR."
+  (highlight-indent-guides--memoize-bitmap
+   color
+   (let* ((rgb (color-name-to-rgb color))
+          (r (number-to-string (floor (* 65536 (car rgb)))))
+          (g (number-to-string (floor (* 65536 (nth 1 rgb)))))
+          (b (number-to-string (floor (* 65536 (nth 2 rgb))))))
+     (concat " " r " " g " " b))))
+
+(defun highlight-indent-guides--bitmap-line (width height crep zrep)
+  "Defines a solid guide line, two pixels wide.
+Use WIDTH, HEIGHT, CREP, and ZREP as described in
+`highlight-indent-guides-bitmap-function'."
   (let* ((left (/ (- width 2) 2))
          (right (- width left 2))
-         (row (concat (make-string left ?0) (make-string 2 crep) (make-string right ?0)))
+         (row (append (make-list left zrep) (make-list 2 crep) (make-list right zrep)))
          rows)
     (dotimes (i height rows)
       (setq rows (cons row rows)))))
 
-(defun highlight-indent-guides--bitmap-dots (width height crep)
-  "Defines a dotted guide line, with 2x2 pixel dots, and four dots per row."
+(defun highlight-indent-guides--bitmap-dots (width height crep zrep)
+  "Defines a dotted guide line, with 2x2 pixel dots, and 3 or 4 dots per row.
+Use WIDTH, HEIGHT, CREP, and ZREP as described in
+`highlight-indent-guides-bitmap-function'."
   (let* ((left (/ (- width 2) 2))
          (right (- width left 2))
-         (space (/ height 4))
-         (space1 (/ (- space 2) 2))
-         (row1 (concat (make-string left ?0) (make-string 2 crep) (make-string right ?0)))
-         (row2 (make-string width ?0))
-         rows)
+         (space3 (/ height 3))
+         (space31 (/ (- space3 2) 2))
+         (space4 (/ height 4))
+         (space41 (/ (- space4 2) 2))
+         (row1 (append (make-list left zrep) (make-list 2 crep) (make-list right zrep)))
+         (row2 (make-list width zrep))
+         space space1 rows)
+    (if (< (abs (- space4 space41 space41)) (abs (- space3 space31 space31)))
+        (setq space space4 space1 space41)
+      (setq space space3 space1 space31))
     (dotimes (i height rows)
       (if (let ((x (mod (- i space1) space))) (or (eq x 0) (eq x 1)))
           (setq rows (cons row1 rows))
@@ -886,9 +931,10 @@ This runs whenever a theme is loaded, but it can also be run interactively."
            (scharp highlight-indent-guides-auto-stack-character-face-perc)
            mod fl bl)
       (if (not (and fg bg))
-          (message "Error: %s: %s"
-                   "highlight-indent-guides cannot auto set faces"
-                   "`default' face is not set properly")
+          (unless highlight-indent-guides-suppress-auto-error
+            (message "Error: %s: %s"
+                     "highlight-indent-guides cannot auto set faces"
+                     "`default' face is not set properly"))
         (setq fl (nth 2 (apply 'color-rgb-to-hsl fg)))
         (setq bl (nth 2 (apply 'color-rgb-to-hsl bg)))
         (setq mod (cond ((< fl bl) -1) ((> fl bl) 1) ((< 0.5 bl) -1) (t 1)))
